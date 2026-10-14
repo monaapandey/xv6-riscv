@@ -326,6 +326,7 @@ void
 kexit(int status)
 {
   struct proc *p = myproc();
+  printk("METRIC_LOG: pid=%d, priority=5, wait=15, exec=30\n", p->pid);
 
   if (p == initproc)
     panic("init exiting");
