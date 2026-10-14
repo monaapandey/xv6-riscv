@@ -89,6 +89,9 @@ struct proc {
   int xstate;           // Exit status to be returned to parent's wait
   int pid;              // Process ID
 
+  int priority;         // Process priority (0 to 10)
+  uint wait_ticks;      // Kitni der se CPU ka wait kar rahi hai
+  uint run_ticks;       // Kitni der CPU par execute hui (Dashboard ke liye)
   // wait_lock must be held when using this:
   struct proc *parent; // Parent process
 

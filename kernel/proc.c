@@ -106,6 +106,7 @@ allocpid()
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
+// Look in the process table for an UNUSED proc... 
 static struct proc *
 allocproc(void)
 {
@@ -125,14 +126,17 @@ found:
   p->pid = allocpid();
   p->state = USED;
 
+  p->priority = 10;     // Default lowest priority
+  p->wait_ticks = 0;    // Wait time 0 
+  p->run_ticks = 0;     // Execution time 0
+  // ------------------------------------------------------
+
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
     freeproc(p);
     release(&p->lock);
     return 0;
   }
-
-  // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if (p->pagetable == 0) {
     freeproc(p);
@@ -140,8 +144,6 @@ found:
     return 0;
   }
 
-  // Set up new context to start executing at forkret,
-  // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
@@ -322,11 +324,14 @@ reparent(struct proc *p)
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
+// Exit the current process.  Does not return.
 void
 kexit(int status)
 {
   struct proc *p = myproc();
-  printk("METRIC_LOG: pid=%d, priority=5, wait=15, exec=30\n", p->pid);
+  
+  printk("METRIC_LOG: pid=%d, priority=%d, wait=%d, exec=%d\n", 
+         p->pid, p->priority, p->wait_ticks, p->run_ticks);
 
   if (p == initproc)
     panic("init exiting");
@@ -346,21 +351,14 @@ kexit(int status)
   p->cwd = 0;
 
   acquire(&wait_lock);
-
-  // Give any children to init.
   reparent(p);
-
-  // Parent might be sleeping in wait().
   wakeup(p->parent);
-
+  
   acquire(&p->lock);
-
   p->xstate = status;
   p->state = ZOMBIE;
-
   release(&wait_lock);
 
-  // Jump into the scheduler, never to return.
   sched();
   panic("zombie exit");
 }
@@ -434,35 +432,59 @@ scheduler(void)
 
   c->proc = 0;
   for (;;) {
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
     intr_on();
     intr_off();
 
     int found = 0;
+
+    // PASS 1: Aging (Starvation Prevention)
+    // Jo processes wait kar rahi hain, unka time badhao
     for (p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if (p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Don't re-enable interrupts on release.
-        mycpu()->intena = 0;
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+        p->wait_ticks++;
+        if (p->wait_ticks > 30) {
+          if (p->priority > 1) {
+            p->priority--; // Boost priority (1 is highest)
+          }
+          p->wait_ticks = 0; // Reset counter
+        }
       }
       release(&p->lock);
     }
+
+    // PASS 2: Find the Highest Priority
+    // Sabse chota priority number dhundho
+    int best_prio = 100; // Ek bada default number
+    for (p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE && p->priority < best_prio) {
+        best_prio = p->priority;
+      }
+      release(&p->lock);
+    }
+
+    // PASS 3: Run the Process
+    // Jinki priority 'best_prio' se match karti hai, unhe CPU do
+    if (best_prio != 100) {
+      for (p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if (p->state == RUNNABLE && p->priority == best_prio) {
+          
+          p->wait_ticks = 0; // CPU mil gaya, wait time zero kar do
+          p->state = RUNNING;
+          c->proc = p;
+          
+          swtch(&c->context, &p->context);
+
+          mycpu()->intena = 0;
+          c->proc = 0;
+          found = 1;
+        }
+        release(&p->lock);
+      }
+    }
+
     if (found == 0) {
       // nothing to run; stop running on this core until an interrupt.
       asm volatile("wfi");
@@ -699,4 +721,25 @@ procdump(void)
     printk("%d %s %s", p->pid, state, p->name);
     printk("\n");
   }
+}
+// Change priority of a process
+int
+set_priority(int pid, int priority)
+{
+  struct proc *p;
+  int old_priority = -1;
+
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->pid == pid && p->state != UNUSED) {
+      old_priority = p->priority;
+      p->priority = priority;
+      p->wait_ticks = 0;
+      release(&p->lock);
+      return old_priority;
+    }
+    release(&p->lock);
+  }
+  
+  return -1;
 }
