@@ -47,3 +47,7 @@ entry("set_priority");
 entry("clone");
 entry("join");
 entry("sleep");
+entry("sem_alloc");
+entry("sem_wait");
+entry("sem_post");
+entry("sem_free");

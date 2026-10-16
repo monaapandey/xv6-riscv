@@ -29,6 +29,10 @@ int set_priority(int, int);
 int clone(void (*fcn)(void*), void *arg, void *stack);
 int join(void **stack);
 int sleep(int);
+int sem_alloc(int);
+int sem_wait(int);
+int sem_post(int);
+int sem_free(int);
 
 // ulib.c
 int stat(const char *, struct stat *);

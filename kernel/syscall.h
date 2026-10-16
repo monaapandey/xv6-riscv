@@ -25,3 +25,7 @@
 #define SYS_clone  24
 #define SYS_join   25
 #define SYS_sleep   26
+#define SYS_sem_alloc 26
+#define SYS_sem_wait  27
+#define SYS_sem_post  28
+#define SYS_sem_free  29

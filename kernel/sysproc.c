@@ -173,3 +173,34 @@ sys_sleep(void)
   release(&tickslock);
   return 0;
 }
+uint64
+sys_sem_alloc(void)
+{
+  int init_val;
+  argint(0, &init_val);
+  return sem_alloc(init_val);
+}
+
+uint64
+sys_sem_wait(void)
+{
+  int sem_id;
+  argint(0, &sem_id);
+  return sem_wait(sem_id);
+}
+
+uint64
+sys_sem_post(void)
+{
+  int sem_id;
+  argint(0, &sem_id);
+  return sem_post(sem_id);
+}
+
+uint64
+sys_sem_free(void)
+{
+  int sem_id;
+  argint(0, &sem_id);
+  return sem_free(sem_id);
+}
