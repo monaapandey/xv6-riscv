@@ -52,6 +52,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         th { background: #0f172a; color: #38bdf8; }
         .badge-prio { background: #0369a1; color: #e0f2fe; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
         .badge-rr { background: #854d0e; color: #fef08a; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+        .badge-thread { background: #7e22ce; color: #f3e8ff; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
         .refresh-btn { background: #38bdf8; color: #0f172a; border: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; cursor: pointer; float: right; }
         .refresh-btn:hover { background: #0284c7; color: white; }
     </style>
@@ -112,7 +113,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         <th>Exec Ticks</th>
                         <th>Wait Ticks</th>
                         <th>TAT Ticks</th>
-                        <th>Response Ticks</th>
                     </tr>
                 </thead>
                 <tbody id="table-body"></tbody>
@@ -152,10 +152,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     const exec = getValue(item, ['execution_time_ticks', 'exec_ticks', 'exec']);
                     const wt = getValue(item, ['wait_time_ticks', 'wait_ticks', 'wait']);
                     let tat = getValue(item, ['tat_ticks', 'tat']);
-                    let rt = getValue(item, ['rt_ticks', 'rt']);
 
                     if (tat === 0) tat = exec + wt;
-                    if (rt === 0) rt = wt;
 
                     if (pid >= 4) {
                         if (!pidMap[pid]) {
@@ -172,7 +170,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         }
                     }
 
-                    const badgeClass = algo.toLowerCase().includes('round') ? 'badge-rr' : 'badge-prio';
+                    const algoLower = algo.toLowerCase();
+                    let badgeClass = 'badge-prio';
+                    if (algoLower.includes('round')) {
+                        badgeClass = 'badge-rr';
+                    } else if (algoLower.includes('thread')) {
+                        badgeClass = 'badge-thread'; // 
+                    }
 
                     tbody.innerHTML += `<tr>
                         <td><span class="${badgeClass}">${algo}</span></td>
@@ -181,15 +185,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         <td>${exec} ticks</td>
                         <td>${wt} ticks</td>
                         <td><b>${tat} ticks</b></td>
-                        <td>${rt} ticks</td>
                     </tr>`;
                 });
 
-                // Top Metrics: Priority Avg calculated over ALL processes; RR Avg fixed to baseline
                 document.getElementById('prio-tat').innerText = (prioCount ? (prioTatSum / prioCount).toFixed(1) : 0) + ' ticks';
                 document.getElementById('rr-tat').innerText = (rrCount ? (rrTatSum / rrCount).toFixed(1) : 0) + ' ticks';
 
-                // Chart: Select ONLY PIDs that have an explicit Round Robin Baseline recorded (e.g. PID 4, 5, 6, 7)
                 const benchmarkPids = Object.keys(pidMap)
                     .map(Number)
                     .filter(pid => pidMap[pid].rrTat > 0)
@@ -202,10 +203,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     if (info.rrTat > maxTat) maxTat = info.rrTat;
                 });
 
-                benchmarkPids.forEach(pid => {
-                    const info = pidMap[pid];
-                    const prioHeight = Math.max((info.prioTat / maxTat) * 100, 12);
-                    const rrHeight = Math.max((info.rrTat / maxTat) * 100, 12);
+        benchmarkPids.forEach(pid => {
+            const info = pidMap[pid];
+            const prioHeight = Math.max((info.prioTat / maxTat) * 100, 12);
+            const rrHeight = Math.max((info.rrTat / maxTat) * 100, 12);
 
                     chart.innerHTML += `
                         <div class="pid-group">

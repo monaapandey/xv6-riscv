@@ -283,6 +283,10 @@ kfork(void)
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
 
+  // Clear thread flags for fork child
+  np->is_thread = 0;
+  np->ustack = 0;
+
   // increment reference counts on open file descriptors.
   for (i = 0; i < NOFILE; i++)
     if (p->ofile[i])
@@ -330,8 +334,8 @@ kexit(int status)
 {
   struct proc *p = myproc();
   
-  printk("METRIC_LOG: pid=%d, priority=%d, wait=%d, exec=%d\n", 
-         p->pid, p->priority, p->wait_ticks, p->run_ticks);
+  printk("METRIC_LOG: pid=%d, priority=%d, wait=%d, exec=%d, is_thread=%d\n", 
+         p->pid, p->priority, p->total_wait, p->run_ticks, p->is_thread);
 
   if (p == initproc)
     panic("init exiting");
@@ -443,6 +447,7 @@ scheduler(void)
       acquire(&p->lock);
       if (p->state == RUNNABLE) {
         p->wait_ticks++;
+        p->total_wait++;
         if (p->wait_ticks > 30) {
           if (p->priority > 1) {
             p->priority--; // Boost priority (1 is highest)
@@ -742,4 +747,127 @@ set_priority(int pid, int priority)
   }
   
   return -1;
+}
+// ==================== THREAD IMPLEMENTATION (RISC-V) ====================
+
+// Create a new thread sharing user address space with parent
+int
+kclone(uint64 fn, uint64 arg, uint64 stack)
+{
+  int i, pid;
+  struct proc *np;
+  struct proc *p = myproc();
+
+  // 1. Allocate proc structure and kernel stack
+  if((np = allocproc()) == 0) {
+    return -1;
+  }
+
+  // 2. Share user page table (shallow copy user mappings without kallocing new physical memory)
+  for(uint64 va = 0; va < p->sz; va += PGSIZE){
+    pte_t *pte = walk(p->pagetable, va, 0);
+    if(pte == 0 || (*pte & PTE_V) == 0)
+      continue;
+    uint64 pa = PTE2PA(*pte);
+    uint flags = PTE_FLAGS(*pte);
+    if(mappages(np->pagetable, va, PGSIZE, pa, flags) < 0){
+      uvmunmap(np->pagetable, 0, va / PGSIZE, 0);
+      freeproc(np);
+      release(&np->lock);
+      return -1;
+    }
+  }
+  np->sz = p->sz;
+
+  // 3. Copy parent's trapframe registers
+  *(np->trapframe) = *(p->trapframe);
+
+  // 4. RISC-V ABI Stack & Register Setup:
+  // epc = instruction pointer (thread function)
+  // sp  = user stack top (stack address + PGSIZE)
+  // a0  = first argument
+  np->trapframe->epc = fn;
+  np->trapframe->sp = stack + PGSIZE;
+  np->trapframe->a0 = arg;
+
+  // 5. Mark process as a thread
+  np->is_thread = 1;
+  np->ustack = (void*)stack;
+
+  // 6. Share open file descriptors and CWD
+  for(i = 0; i < NOFILE; i++)
+    if(p->ofile[i])
+      np->ofile[i] = filedup(p->ofile[i]);
+  np->cwd = idup(p->cwd);
+
+  safestrcpy(np->name, p->name, sizeof(p->name));
+  pid = np->pid;
+
+  release(&np->lock);
+
+  // 7. Set parent under wait_lock
+  acquire(&wait_lock);
+  np->parent = p;
+  release(&wait_lock);
+
+  // 8. Make thread RUNNABLE
+  acquire(&np->lock);
+  np->state = RUNNABLE;
+  release(&np->lock);
+
+  return pid;
+}
+
+// Wait for a thread created by current process to exit
+int
+kjoin(uint64 stack_addr)
+{
+  struct proc *pp;
+  int havekids, pid;
+  struct proc *p = myproc();
+
+  acquire(&wait_lock);
+
+  for (;;) {
+    havekids = 0;
+    for (pp = proc; pp < &proc[NPROC]; pp++) {
+      if (pp->parent == p && pp->is_thread) {
+        acquire(&pp->lock);
+        havekids = 1;
+
+        if (pp->state == ZOMBIE) {
+          pid = pp->pid;
+
+          // Return user stack pointer if stack_addr pointer is provided
+          if (stack_addr != 0 && copyout(p->pagetable, p->sz, stack_addr, (char *)&pp->ustack, sizeof(pp->ustack)) < 0) {
+            release(&pp->lock);
+            release(&wait_lock);
+            return -1;
+          }
+
+          // Unmap user memory WITHOUT freeing physical memory (since memory is shared)
+          uvmunmap(pp->pagetable, 0, PGROUNDUP(pp->sz) / PGSIZE, 0);
+          pp->sz = 0;
+
+          pp->parent = 0;
+          freeproc(pp);
+          
+          release(&pp->lock);
+          release(&wait_lock);
+          return pid;
+        }
+        release(&pp->lock);
+      }
+    }
+
+    if (!havekids || killed(p)) {
+      release(&wait_lock);
+      return -1;
+    }
+
+    sleep_prepare(p);
+    release(&wait_lock);
+    sleep();
+    acquire(&wait_lock);
+  }
 }

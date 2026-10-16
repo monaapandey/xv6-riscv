@@ -44,3 +44,5 @@ entry("pause");
 entry("uptime");
 entry("sync");
 entry("set_priority");
+entry("clone");
+entry("join");

@@ -104,6 +104,8 @@ int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
 int             set_priority(int, int);
+int             kclone(uint64 fn, uint64 arg, uint64 stack);
+int             kjoin(uint64 stack);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

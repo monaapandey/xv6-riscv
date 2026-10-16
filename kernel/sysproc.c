@@ -123,3 +123,30 @@ sys_set_priority(void)
     
   return set_priority(pid, priority);
 }
+// ==================== THREADS SYSCALLS ====================
+
+uint64
+sys_clone(void)
+{
+  uint64 fcn, arg, stack;
+  
+  // RISC-V mein user-space pointers 64-bit virtual addresses hote hain.
+  // argaddr() unhe registers (a0, a1, a2) se safely fetch karta hai.
+  argaddr(0, &fcn);
+  argaddr(1, &arg);
+  argaddr(2, &stack);
+  
+  return kclone(fcn, arg, stack);
+}
+
+uint64
+sys_join(void)
+{
+  uint64 stack_addr;
+  
+  // User process address bhejti hai jahan exit hone wale thread 
+  // ke stack ka base pointer save karna hai (taaki memory free ho sake).
+  argaddr(0, &stack_addr);
+  
+  return kjoin(stack_addr);
+}

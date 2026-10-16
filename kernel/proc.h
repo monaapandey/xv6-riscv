@@ -92,6 +92,7 @@ struct proc {
   int priority;         // Process priority (0 to 10)
   uint wait_ticks;      // Kitni der se CPU ka wait kar rahi hai
   uint run_ticks;       // Kitni der CPU par execute hui (Dashboard ke liye)
+  int total_wait; // Telemetry ke liye lifetime wait ticks
   // wait_lock must be held when using this:
   struct proc *parent; // Parent process
 
@@ -104,4 +105,6 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  int is_thread;               // 1 if created by kclone(), 0 otherwise
+  void *ustack;                // Pointer to allocated user stack
 };
