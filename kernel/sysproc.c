@@ -150,3 +150,26 @@ sys_join(void)
   
   return kjoin(stack_addr);
 }
+uint64
+sys_sleep(void)
+{
+  int n;
+  uint ticks0;
+
+  // argint void return karta hai isliye direct call karo
+  argint(0, &n);
+
+  acquire(&tickslock);
+  ticks0 = ticks;
+  while(ticks - ticks0 < n){
+    if(killed(myproc())){
+      release(&tickslock);
+      return -1;
+    }
+    release(&tickslock);
+    yield();
+    acquire(&tickslock);
+  }
+  release(&tickslock);
+  return 0;
+}

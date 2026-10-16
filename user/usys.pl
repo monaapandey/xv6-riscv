@@ -46,3 +46,4 @@ entry("sync");
 entry("set_priority");
 entry("clone");
 entry("join");
+entry("sleep");
