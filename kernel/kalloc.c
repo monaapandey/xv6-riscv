@@ -21,13 +21,23 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
+  uint64 total_pages;
+  uint64 free_pages;
+  uint64 alloc_events;
+  uint64 free_events;
 } kmem;
 
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  kmem.total_pages = (PHYSTOP - (uint64)end) / PGSIZE;
+  kmem.free_pages = 0;
   freerange(end, (void *)PHYSTOP);
+  
+  // Reset events after boot initialization
+  kmem.alloc_events = 0;
+  kmem.free_events = 0;
 }
 
 void
@@ -47,18 +57,19 @@ void
 kfree(void *pa)
 {
   struct run *r;
-
+  
   if (((uint64)pa % PGSIZE) != 0 || (char *)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
-
+  
   r = (struct run *)pa;
-
+  
   acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
+  kmem.free_pages++;
+  kmem.free_events++;
   release(&kmem.lock);
 }
 
@@ -69,14 +80,26 @@ void *
 kalloc(void)
 {
   struct run *r;
-
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if (r)
+  if (r) {
     kmem.freelist = r->next;
+    kmem.free_pages--;
+    kmem.alloc_events++;
+  }
   release(&kmem.lock);
-
   if (r)
-    memset((char *)r, 5, PGSIZE); // fill with junk
+    memset((char *)r, 5, PGSIZE);
   return (void *)r;
+}
+
+#include "sysmem.h"
+void get_sys_meminfo(struct sys_mem_info *info) {
+  acquire(&kmem.lock);
+  info->total_pages = kmem.total_pages;
+  info->free_pages = kmem.free_pages;
+  info->used_pages = kmem.total_pages - kmem.free_pages;
+  info->alloc_events = kmem.alloc_events;
+  info->free_events = kmem.free_events;
+  release(&kmem.lock);
 }

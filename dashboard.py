@@ -1,7 +1,7 @@
 import http.server
+import json
 import socketserver
 import sqlite3
-import json
 
 PORT = 8000
 
@@ -9,20 +9,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>xv6 Telemetry & Kernel Performance Analysis</title>
+    <title>xv6 Telemetry & Kernel Performance Observatory</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 25px; }
-        .container { max-width: 1050px; margin: 0 auto; }
+        .container { max-width: 1150px; margin: 0 auto; }
         h1 { color: #38bdf8; font-size: 26px; border-bottom: 2px solid #1e293b; padding-bottom: 10px; }
         .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); }
         h2 { color: #94a3b8; font-size: 17px; margin-top: 0; }
         
+        .section-title { color: #38bdf8; font-size: 20px; margin: 25px 0 15px 0; border-left: 4px solid #38bdf8; padding-left: 10px; }
+
         .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 20px; }
         .metric-box { background: #0f172a; padding: 18px 12px; border-radius: 8px; text-align: center; border-left: 4px solid #38bdf8; }
-        .metric-val { font-size: 24px; font-weight: bold; color: #38bdf8; margin-top: 5px; }
+        .metric-val { font-size: 22px; font-weight: bold; color: #38bdf8; margin-top: 5px; }
         
         .metric-sub { 
-            font-size: 14px; 
+            font-size: 13px; 
             font-weight: 600; 
             color: #e2e8f0; 
             margin-top: 8px; 
@@ -38,7 +40,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .legend-item { display: flex; align-items: center; gap: 8px; }
         .legend-color { width: 16px; height: 16px; border-radius: 4px; }
         
-        .bar-container { display: flex; align-items: flex-end; justify-content: space-around; height: 250px; padding-top: 20px; border-bottom: 2px solid #475569; }
+        .bar-container { display: flex; align-items: flex-end; justify-content: space-around; height: 220px; padding-top: 20px; border-bottom: 2px solid #475569; }
         .pid-group { display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; flex: 1; }
         .bars-wrapper { display: flex; align-items: flex-end; gap: 12px; height: 100%; justify-content: center; width: 100%; }
         
@@ -50,18 +52,73 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }
         th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid #334155; }
         th { background: #0f172a; color: #38bdf8; }
+        
         .badge-prio { background: #0369a1; color: #e0f2fe; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
         .badge-rr { background: #854d0e; color: #fef08a; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
         .badge-thread { background: #7e22ce; color: #f3e8ff; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
-        .refresh-btn { background: #38bdf8; color: #0f172a; border: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; cursor: pointer; float: right; }
+        .badge-proc { background: #15803d; color: #dcfce7; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+        
+        .refresh-btn { background: #38bdf8; color: #0f172a; border: none; padding: 10px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; float: right; }
         .refresh-btn:hover { background: #0284c7; color: white; }
+        
+        /* Memory Progress Bar */
+        .progress-bg { background: #0f172a; border-radius: 8px; height: 18px; width: 100%; overflow: hidden; margin-top: 8px; border: 1px solid #334155; }
+        .progress-fill { background: linear-gradient(90deg, #38bdf8, #818cf8); height: 100%; transition: width 0.5s ease; }
     </style>
 </head>
 <body>
     <div class="container">
-        <button class="refresh-btn" onclick="loadData()">🔄 Refresh Data</button>
-        <h1>🚀 xv6 Telemetry & Kernel Performance Analysis</h1>
+        <button class="refresh-btn" onclick="loadAllData()">🔄 Refresh Telemetry</button>
+        <h1>🚀 xv6 Kernel Observatory & Memory Analytics</h1>
         
+        <!-- SECTION 1: MEMORY ANALYTICS (PHASE 1) -->
+        <div class="section-title">🧠 Phase 1: Physical Memory Telemetry</div>
+        <div class="grid-4">
+            <div class="card metric-box" style="border-left-color: #38bdf8;">
+                <h2>Total Physical RAM</h2>
+                <div class="metric-val" id="mem-total">128.0 MB</div>
+                <div class="metric-sub" id="mem-total-pages">32768 Pages</div>
+            </div>
+            <div class="card metric-box" style="border-left-color: #f43f5e;">
+                <h2>Used RAM Footprint</h2>
+                <div class="metric-val" style="color: #f43f5e;" id="mem-used">0 KB</div>
+                <div class="metric-sub" id="mem-used-pages">0 Pages</div>
+            </div>
+            <div class="card metric-box" style="border-left-color: #4ade80;">
+                <h2>Free RAM Pool</h2>
+                <div class="metric-val" style="color: #4ade80;" id="mem-free">128.0 MB</div>
+                <div class="metric-sub" id="mem-free-pages">0 Pages</div>
+            </div>
+            <div class="card metric-box" style="border-left-color: #a855f7;">
+                <h2>RAM Utilization</h2>
+                <div class="metric-val" style="color: #a855f7;" id="mem-util">0.0%</div>
+                <div class="progress-bg"><div class="progress-fill" id="mem-progress" style="width: 0%;"></div></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📋 Active Processes: Virtual Memory vs Resident Pages (RSS)</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>PID</th>
+                        <th>ASID</th>
+                        <th>Type</th>
+                        <th>Process Name</th>
+                        <th>Virtual Memory Size</th>
+                        <th>Resident Physical Pages</th>
+                        <th>RAM Footprint</th>
+                        <th>State</th>
+                    </tr>
+                </thead>
+                <tbody id="proc-mem-table">
+                    <tr><td colspan="8" style="text-align: center; color: #64748b;">Waiting for memory telemetry logs...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- SECTION 2: CPU SCHEDULING OBSERVATORY (EXISTING) -->
+        <div class="section-title">⚡ CPU Priority Scheduling & Aging</div>
         <div class="grid-4">
             <div class="card metric-box">
                 <h2>Priority Avg TAT</h2>
@@ -103,7 +160,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
 
         <div class="card">
-            <h2>📋 Complete Historical Telemetry Log</h2>
+            <h2>📋 Historical CPU Scheduling Log</h2>
             <table>
                 <thead>
                     <tr>
@@ -130,7 +187,68 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             return 0;
         }
 
-        async function loadData() {
+        async function loadMemoryData() {
+            try {
+                // 1. System Memory Data
+                const sysRes = await fetch('/memory_sys');
+                const sysData = await sysRes.json();
+                if (sysData.length > 0) {
+                    const latest = sysData[0];
+                    const totalMb = (latest.total_memory / (1024 * 1024)).toFixed(1);
+                    const usedKb = (latest.used_memory / 1024).toFixed(1);
+                    const freeMb = (latest.free_memory / (1024 * 1024)).toFixed(1);
+                    const util = latest.utilization_percentage.toFixed(1);
+
+                    document.getElementById('mem-total').innerText = totalMb + ' MB';
+                    document.getElementById('mem-total-pages').innerText = (latest.total_memory / 4096) + ' Pages';
+                    
+                    document.getElementById('mem-used').innerText = usedKb + ' KB';
+                    document.getElementById('mem-used-pages').innerText = (latest.used_memory / 4096) + ' Pages';
+                    
+                    document.getElementById('mem-free').innerText = freeMb + ' MB';
+                    document.getElementById('mem-free-pages').innerText = (latest.free_memory / 4096) + ' Pages';
+                    
+                    document.getElementById('mem-util').innerText = util + '%';
+                    document.getElementById('mem-progress').style.width = util + '%';
+                }
+
+                // 2. Process Memory Data
+                const procRes = await fetch('/memory_proc');
+                const procData = await procRes.json();
+                const procTable = document.getElementById('proc-mem-table');
+                procTable.innerHTML = '';
+
+                if (procData.length === 0) {
+                    procTable.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #64748b;">No active memory statistics found.</td></tr>';
+                    return;
+                }
+
+                const stateNames = { 0: 'UNUSED', 1: 'USED', 2: 'SLEEPING', 3: 'RUNNABLE', 4: 'RUNNING', 5: 'ZOMBIE' };
+
+                procData.forEach(p => {
+                    const typeBadge = p.is_thread === 1 ? '<span class="badge-thread">Thread</span>' : '<span class="badge-proc">Process</span>';
+                    const ramKb = (p.resident_memory / 1024).toFixed(1) + ' KB';
+                    const vmemKb = (p.virtual_memory / 1024).toFixed(1) + ' KB';
+                    const stateText = stateNames[p.process_state] || 'UNKNOWN';
+
+                    procTable.innerHTML += `<tr>
+                        <td><b>PID ${p.pid}</b></td>
+                        <td>ASID ${p.asid}</td>
+                        <td>${typeBadge}</td>
+                        <td><code>${p.process_name}</code></td>
+                        <td>${vmemKb}</td>
+                        <td><b>${p.resident_pages} pages</b></td>
+                        <td><span style="color: #38bdf8; font-weight: bold;">${ramKb}</span></td>
+                        <td>${stateText}</td>
+                    </tr>`;
+                });
+
+            } catch (e) {
+                console.error("Error loading Memory data:", e);
+            }
+        }
+
+        async function loadCpuData() {
             try {
                 const res = await fetch('/data');
                 const data = await res.json();
@@ -142,7 +260,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                 let prioTatSum = 0, prioCount = 0;
                 let rrTatSum = 0, rrCount = 0;
-
                 const pidMap = {};
 
                 data.forEach(item => {
@@ -175,7 +292,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     if (algoLower.includes('round')) {
                         badgeClass = 'badge-rr';
                     } else if (algoLower.includes('thread')) {
-                        badgeClass = 'badge-thread'; // 
+                        badgeClass = 'badge-thread';
                     }
 
                     tbody.innerHTML += `<tr>
@@ -203,10 +320,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     if (info.rrTat > maxTat) maxTat = info.rrTat;
                 });
 
-        benchmarkPids.forEach(pid => {
-            const info = pidMap[pid];
-            const prioHeight = Math.max((info.prioTat / maxTat) * 100, 12);
-            const rrHeight = Math.max((info.rrTat / maxTat) * 100, 12);
+                benchmarkPids.forEach(pid => {
+                    const info = pidMap[pid];
+                    const prioHeight = Math.max((info.prioTat / maxTat) * 100, 12);
+                    const rrHeight = Math.max((info.rrTat / maxTat) * 100, 12);
 
                     chart.innerHTML += `
                         <div class="pid-group">
@@ -220,10 +337,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 });
 
             } catch (e) {
-                console.error("Error loading data:", e);
+                console.error("Error loading CPU data:", e);
             }
         }
-        loadData();
+
+        function loadAllData() {
+            loadMemoryData();
+            loadCpuData();
+        }
+
+        loadAllData();
     </script>
 </body>
 </html>"""
@@ -231,30 +354,44 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/data':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            
-            result = []
-            try:
-                conn = sqlite3.connect('xv6_analytics.db')
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM process_metrics")
-                rows = cursor.fetchall()
-                cols = [d[0] for d in cursor.description]
-                result = [dict(zip(cols, r)) for r in rows]
-                conn.close()
-            except Exception as e:
-                result = []
-
-            self.wfile.write(json.dumps(result).encode('utf-8'))
+            self.send_json_response("SELECT * FROM process_metrics ORDER BY metric_id DESC")
+        elif self.path == '/memory_sys':
+            self.send_json_response("SELECT * FROM system_memory_snapshots ORDER BY id DESC LIMIT 20")
+        elif self.path == '/memory_proc':
+            # Subquery to fetch the latest snapshot for each active PID
+            query = """
+                SELECT * FROM process_memory_stats 
+                WHERE id IN (SELECT MAX(id) FROM process_memory_stats GROUP BY pid)
+                ORDER BY pid ASC
+            """
+            self.send_json_response(query)
         else:
             self.send_response(200)
             self.send_header('Content-type', 'text/html')
             self.end_headers()
             self.wfile.write(HTML_TEMPLATE.encode('utf-8'))
 
+    def send_json_response(self, query):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        
+        result = []
+        try:
+            conn = sqlite3.connect('xv6_analytics.db')
+            cursor = conn.cursor()
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            cols = [d[0] for d in cursor.description]
+            result = [dict(zip(cols, r)) for r in rows]
+            conn.close()
+        except Exception as e:
+            result = []
+
+        self.wfile.write(json.dumps(result).encode('utf-8'))
+
 with socketserver.TCPServer(("", PORT), Handler) as httpd:
-    print(f"\n[+] Advanced Dashboard live at: http://localhost:{PORT}")
+    print(f"\n[+] Integrated Observatory live at: http://localhost:{PORT}")
+    print("[+] Tracking both CPU Scheduling & Memory Metrics from xv6_analytics.db")
     print("[+] Press Ctrl+C to stop.\n")
     httpd.serve_forever()

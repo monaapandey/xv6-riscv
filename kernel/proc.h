@@ -107,4 +107,6 @@ struct proc {
   char name[16];               // Process name (debugging)
   int is_thread;               // 1 if created by kclone(), 0 otherwise
   void *ustack;                // Pointer to allocated user stack
+  struct spinlock mem_lock;    // Protects page table and sz
+  uint64 asid;                 // Address Space ID
 };

@@ -489,3 +489,16 @@ ismapped(pagetable_t pagetable, uint64 va)
   }
   return 0;
 }
+
+uint64
+count_resident_pages(pagetable_t pagetable, uint64 sz)
+{
+  uint64 count = 0;
+  for (uint64 a = 0; a < sz; a += PGSIZE) {
+    pte_t *pte = walk(pagetable, a, 0);
+    if (pte != 0 && (*pte & PTE_V) && (*pte & PTE_U)) {
+      count++;
+    }
+  }
+  return count;
+}

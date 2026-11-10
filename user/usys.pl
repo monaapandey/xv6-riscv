@@ -51,3 +51,5 @@ entry("sem_alloc");
 entry("sem_wait");
 entry("sem_post");
 entry("sem_free");
+entry("sysinfo");
+entry("procinfo");

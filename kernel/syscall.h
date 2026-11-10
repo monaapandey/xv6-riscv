@@ -29,3 +29,5 @@
 #define SYS_sem_wait  27
 #define SYS_sem_post  28
 #define SYS_sem_free  29
+#define SYS_sysinfo 30
+#define SYS_procinfo 31

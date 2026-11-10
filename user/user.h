@@ -1,6 +1,8 @@
 #define SBRK_ERROR ((char *)-1)
 
 struct stat;
+struct sys_mem_info;
+struct proc_mem_info;
 
 // system calls
 int fork(void);
@@ -33,6 +35,8 @@ int sem_alloc(int);
 int sem_wait(int);
 int sem_post(int);
 int sem_free(int);
+int sysinfo(struct sys_mem_info*);
+int procinfo(struct proc_mem_info*);
 
 // ulib.c
 int stat(const char *, struct stat *);

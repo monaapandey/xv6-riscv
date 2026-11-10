@@ -53,6 +53,7 @@ procinit(void)
   initlock(&wait_lock, "wait_lock");
   for (p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
+    initlock(&p->mem_lock, "proc_mem");
     p->state = UNUSED;
     p->kstack = KSTACK((int)(p - proc));
   }
@@ -102,6 +103,16 @@ allocpid()
   return pid;
 }
 
+int count_asid_tasks(uint64 asid) {
+  struct proc *p;
+  int count = 0;
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->state != UNUSED && p->state != ZOMBIE && p->asid == asid) count++;
+    release(&p->lock);
+  }
+  return count;
+}
 // Look in the process table for an UNUSED proc.
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
@@ -124,6 +135,7 @@ allocproc(void)
 
 found:
   p->pid = allocpid();
+  p->asid = p->pid; // Primary process gets its own ASID
   p->state = USED;
 
   p->priority = 10;     // Default lowest priority
@@ -234,24 +246,25 @@ userinit(void)
 
 // Grow or shrink user memory by n bytes.
 // Return 0 on success, -1 on failure.
-int
-growproc(int n)
-{
+int growproc(int n) {
   uint64 sz;
   struct proc *p = myproc();
 
+  // Frozen Address-Space Contract
+  if (count_asid_tasks(p->asid) > 1) return -1; 
+
+  acquire(&p->mem_lock);
   sz = p->sz;
   if (n > 0) {
-    if (sz + n > TRAPFRAME) {
-      return -1;
-    }
+    if (sz + n > TRAPFRAME) { release(&p->mem_lock); return -1; }
     if ((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
-      return -1;
+      release(&p->mem_lock); return -1;
     }
   } else if (n < 0) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
+  release(&p->mem_lock);
   return 0;
 }
 
@@ -295,6 +308,7 @@ kfork(void)
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
+  np->asid = np->pid;
   pid = np->pid;
 
   release(&np->lock);
@@ -792,6 +806,7 @@ kclone(uint64 fn, uint64 arg, uint64 stack)
 
   // 5. Mark process as a thread
   np->is_thread = 1;
+  np->asid = p->asid; // Inherit parent's ASID
   np->ustack = (void*)stack;
 
   // 6. Share open file descriptors and CWD
@@ -870,4 +885,40 @@ kjoin(uint64 stack_addr)
     sleep();
     acquire(&wait_lock);
   }
+}
+
+#include "sysmem.h"
+
+int get_proc_meminfo(uint64 addr) {
+  // Use kalloc to prevent kernel stack overflow
+  struct proc_mem_info *pmi = (struct proc_mem_info *)kalloc();
+  if (!pmi) return -1;
+
+  struct proc *p;
+  int count = 0;
+
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->state != UNUSED) {
+      acquire(&p->mem_lock);
+      pmi[count].pid = p->pid;
+      pmi[count].asid = p->asid;
+      pmi[count].is_thread = p->is_thread;
+      safestrcpy(pmi[count].name, p->name, sizeof(p->name));
+      pmi[count].vmem_sz = p->sz;
+      pmi[count].resident_pages = count_resident_pages(p->pagetable, p->sz);
+      pmi[count].state = p->state;
+      count++;
+      release(&p->mem_lock);
+    }
+    release(&p->lock);
+  }
+
+  struct proc *curr = myproc();
+  int ret = count;
+  if (copyout(curr->pagetable, curr->sz, addr, (char *)pmi, count * sizeof(struct proc_mem_info)) < 0) {
+    ret = -1;
+  }
+  kfree((void*)pmi);
+  return ret;
 }

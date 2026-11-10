@@ -204,3 +204,22 @@ sys_sem_free(void)
   argint(0, &sem_id);
   return sem_free(sem_id);
 }
+#include "sysmem.h"
+
+extern int get_proc_meminfo(uint64 addr);
+
+uint64 sys_sysinfo(void) {
+  uint64 addr;
+  argaddr(0, &addr);
+  struct sys_mem_info smi;
+  get_sys_meminfo(&smi);
+  struct proc *p = myproc();
+  if (copyout(p->pagetable, p->sz, addr, (char *)&smi, sizeof(smi)) < 0) return -1;
+  return 0;
+}
+
+uint64 sys_procinfo(void) {
+  uint64 addr;
+  argaddr(0, &addr);
+  return get_proc_meminfo(addr);
+}

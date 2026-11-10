@@ -155,6 +155,7 @@ UPROGS=\
 	$U/_threadtest\
 	$U/_deadlock\
 	$U/_synctest\
+	$U/_memmon\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
