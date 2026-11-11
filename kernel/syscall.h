@@ -31,3 +31,5 @@
 #define SYS_sem_free  29
 #define SYS_sysinfo 30
 #define SYS_procinfo 31
+#define SYS_kclone      32
+#define SYS_kjoin       33

@@ -223,3 +223,21 @@ uint64 sys_procinfo(void) {
   argaddr(0, &addr);
   return get_proc_meminfo(addr);
 }
+
+uint64
+sys_kclone(void)
+{
+  uint64 fn, arg, stack;
+  argaddr(0, &fn);
+  argaddr(1, &arg);
+  argaddr(2, &stack);
+  return kclone(fn, arg, stack);
+}
+
+uint64
+sys_kjoin(void)
+{
+  uint64 stack;
+  argaddr(0, &stack);
+  return kjoin(stack);
+}

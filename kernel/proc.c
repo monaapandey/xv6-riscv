@@ -172,8 +172,28 @@ freeproc(struct proc *p)
   if (p->trapframe)
     kfree((void *)p->trapframe);
   p->trapframe = 0;
-  if (p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
+
+  int is_last = 1;
+  for (struct proc *pp = proc; pp < &proc[NPROC]; pp++) {
+    if (pp != p && pp->state != UNUSED && pp->asid == p->asid) {
+      is_last = 0;
+      break;
+    }
+  }
+
+  if (p->pagetable) {
+    if (is_last) {
+      // Last task in ASID: Free page table and physical memory pages
+      proc_freepagetable(p->pagetable, p->sz);
+    } else {
+      // Sibling threads active: Unmap page table without freeing shared physical RAM
+      uvmunmap(p->pagetable, TRAMPOLINE, 1, 0);
+      uvmunmap(p->pagetable, TRAPFRAME, 1, 0);
+      uvmunmap(p->pagetable, 0, PGROUNDUP(p->sz) / PGSIZE, 0);
+      uvmfree(p->pagetable, 0);
+    }
+  }
+
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -249,20 +269,48 @@ userinit(void)
 int growproc(int n) {
   uint64 sz;
   struct proc *p = myproc();
-
-  // Frozen Address-Space Contract
-  if (count_asid_tasks(p->asid) > 1) return -1; 
+  uint64 asid = p->asid;
 
   acquire(&p->mem_lock);
   sz = p->sz;
+
   if (n > 0) {
     if (sz + n > TRAPFRAME) { release(&p->mem_lock); return -1; }
-    if ((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
+    
+    uint64 newsz;
+    if ((newsz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
       release(&p->mem_lock); return -1;
     }
+
+    // Map newly allocated physical pages into all sibling threads sharing the same ASID
+    for (uint64 a = sz; a < newsz; a += PGSIZE) {
+      pte_t *pte = walk(p->pagetable, a, 0);
+      if (pte && (*pte & PTE_V)) {
+        uint64 pa = PTE2PA(*pte);
+        uint flags = PTE_FLAGS(*pte);
+        
+        for (struct proc *pp = proc; pp < &proc[NPROC]; pp++) {
+          if (pp != p && pp->state != UNUSED && pp->asid == asid) {
+            mappages(pp->pagetable, a, PGSIZE, pa, flags);
+            pp->sz = newsz;
+          }
+        }
+      }
+    }
+    sz = newsz;
   } else if (n < 0) {
-    sz = uvmdealloc(p->pagetable, sz, sz + n);
+    uint64 newsz = uvmdealloc(p->pagetable, sz, sz + n);
+
+    // Unmap pages from all sibling threads
+    for (struct proc *pp = proc; pp < &proc[NPROC]; pp++) {
+      if (pp != p && pp->state != UNUSED && pp->asid == asid) {
+        uvmunmap(pp->pagetable, PGROUNDUP(newsz), (PGROUNDUP(sz) - PGROUNDUP(newsz)) / PGSIZE, 0);
+        pp->sz = newsz;
+      }
+    }
+    sz = newsz;
   }
+
   p->sz = sz;
   release(&p->mem_lock);
   return 0;
@@ -772,12 +820,11 @@ kclone(uint64 fn, uint64 arg, uint64 stack)
   struct proc *np;
   struct proc *p = myproc();
 
-  // 1. Allocate proc structure and kernel stack
   if((np = allocproc()) == 0) {
     return -1;
   }
 
-  // 2. Share user page table (shallow copy user mappings without kallocing new physical memory)
+  // Share user page table mapping (each thread gets its own TRAPFRAME mapping)
   for(uint64 va = 0; va < p->sz; va += PGSIZE){
     pte_t *pte = walk(p->pagetable, va, 0);
     if(pte == 0 || (*pte & PTE_V) == 0)
@@ -793,23 +840,16 @@ kclone(uint64 fn, uint64 arg, uint64 stack)
   }
   np->sz = p->sz;
 
-  // 3. Copy parent's trapframe registers
   *(np->trapframe) = *(p->trapframe);
 
-  // 4. RISC-V ABI Stack & Register Setup:
-  // epc = instruction pointer (thread function)
-  // sp  = user stack top (stack address + PGSIZE)
-  // a0  = first argument
   np->trapframe->epc = fn;
   np->trapframe->sp = stack + PGSIZE;
   np->trapframe->a0 = arg;
 
-  // 5. Mark process as a thread
   np->is_thread = 1;
   np->asid = p->asid; // Inherit parent's ASID
   np->ustack = (void*)stack;
 
-  // 6. Share open file descriptors and CWD
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
@@ -820,12 +860,10 @@ kclone(uint64 fn, uint64 arg, uint64 stack)
 
   release(&np->lock);
 
-  // 7. Set parent under wait_lock
   acquire(&wait_lock);
   np->parent = p;
   release(&wait_lock);
 
-  // 8. Make thread RUNNABLE
   acquire(&np->lock);
   np->state = RUNNABLE;
   release(&np->lock);
@@ -860,9 +898,9 @@ kjoin(uint64 stack_addr)
             return -1;
           }
 
-          // Unmap user memory WITHOUT freeing physical memory (since memory is shared)
-          uvmunmap(pp->pagetable, 0, PGROUNDUP(pp->sz) / PGSIZE, 0);
-          pp->sz = 0;
+          // PHASE 2: uvmunmap HATA DIYA!
+          // Kyunki memory truly shared hai, memory free karne ka kaam ab
+          // sirf freeproc() karega jab aakhiri thread exit hogi.
 
           pp->parent = 0;
           freeproc(pp);

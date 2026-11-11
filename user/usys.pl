@@ -53,3 +53,5 @@ entry("sem_post");
 entry("sem_free");
 entry("sysinfo");
 entry("procinfo");
+entry("kclone");
+entry("kjoin");
