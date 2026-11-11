@@ -277,31 +277,21 @@ int growproc(int n) {
   if (n > 0) {
     if (sz + n > TRAPFRAME) { release(&p->mem_lock); return -1; }
     
-    uint64 newsz;
-    if ((newsz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
-      release(&p->mem_lock); return -1;
-    }
-
-    // Map newly allocated physical pages into all sibling threads sharing the same ASID
-    for (uint64 a = sz; a < newsz; a += PGSIZE) {
-      pte_t *pte = walk(p->pagetable, a, 0);
-      if (pte && (*pte & PTE_V)) {
-        uint64 pa = PTE2PA(*pte);
-        uint flags = PTE_FLAGS(*pte);
-        
-        for (struct proc *pp = proc; pp < &proc[NPROC]; pp++) {
-          if (pp != p && pp->state != UNUSED && pp->asid == asid) {
-            mappages(pp->pagetable, a, PGSIZE, pa, flags);
-            pp->sz = newsz;
-          }
-        }
+    // PHASE 3: LAZY ALLOCATION (Demand Paging)
+    // Ab hum physical RAM alloc (uvmalloc) nahi karenge!
+    // Sirf Virtual Size (sz) badha denge. Memory tab milegi jab Page Fault aayega.
+    uint64 newsz = sz + n;
+    
+    // Size sab threads mein update karo
+    for (struct proc *pp = proc; pp < &proc[NPROC]; pp++) {
+      if (pp->state != UNUSED && pp->asid == asid) {
+        pp->sz = newsz;
       }
     }
     sz = newsz;
   } else if (n < 0) {
     uint64 newsz = uvmdealloc(p->pagetable, sz, sz + n);
 
-    // Unmap pages from all sibling threads
     for (struct proc *pp = proc; pp < &proc[NPROC]; pp++) {
       if (pp != p && pp->state != UNUSED && pp->asid == asid) {
         uvmunmap(pp->pagetable, PGROUNDUP(newsz), (PGROUNDUP(sz) - PGROUNDUP(newsz)) / PGSIZE, 0);

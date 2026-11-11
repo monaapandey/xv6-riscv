@@ -116,6 +116,7 @@ extern uint64 sys_sysinfo(void);
 extern uint64 sys_procinfo(void);
 extern uint64 sys_kclone(void);
 extern uint64 sys_kjoin(void);
+extern uint64 sys_set_algo(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -159,7 +160,8 @@ static uint64 (*syscalls[])(void) = {
   [SYS_sysinfo] = sys_sysinfo, 
   [SYS_procinfo] = sys_procinfo,
   [SYS_kclone]    sys_kclone,
-  [SYS_kjoin]     sys_kjoin
+  [SYS_kjoin]     sys_kjoin,
+  [SYS_set_algo]    sys_set_algo
   // clang-format on
 };
 

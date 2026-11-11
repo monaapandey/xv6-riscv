@@ -241,3 +241,13 @@ sys_kjoin(void)
   argaddr(0, &stack);
   return kjoin(stack);
 }
+
+extern int set_page_algo(int algo);
+
+uint64
+sys_set_algo(void)
+{
+  int algo;
+  argint(0, &algo);
+  return set_page_algo(algo);
+}

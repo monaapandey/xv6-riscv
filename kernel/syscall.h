@@ -33,3 +33,4 @@
 #define SYS_procinfo 31
 #define SYS_kclone      32
 #define SYS_kjoin       33
+#define SYS_set_algo  34

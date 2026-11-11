@@ -17,9 +17,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); }
         h2 { color: #94a3b8; font-size: 17px; margin-top: 0; }
         
-        .section-title { color: #38bdf8; font-size: 20px; margin: 25px 0 15px 0; border-left: 4px solid #38bdf8; padding-left: 10px; }
+        .section-header { display: flex; justify-content: space-between; align-items: center; margin: 25px 0 15px 0; }
+        .section-title { color: #38bdf8; font-size: 20px; border-left: 4px solid #38bdf8; padding-left: 10px; }
 
         .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 20px; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 20px; }
         .metric-box { background: #0f172a; padding: 18px 12px; border-radius: 8px; text-align: center; border-left: 4px solid #38bdf8; }
         .metric-val { font-size: 22px; font-weight: bold; color: #38bdf8; margin-top: 5px; }
         
@@ -35,6 +37,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             letter-spacing: 0.3px;
         }
         
+        .algo-badge {
+            background: linear-gradient(135deg, #0284c7, #2563eb);
+            color: #ffffff;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+        }
+
         .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
         .legend { display: flex; gap: 20px; font-size: 14px; font-weight: 500; }
         .legend-item { display: flex; align-items: center; gap: 8px; }
@@ -61,7 +74,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .refresh-btn { background: #38bdf8; color: #0f172a; border: none; padding: 10px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; float: right; }
         .refresh-btn:hover { background: #0284c7; color: white; }
         
-        /* Memory Progress Bar */
         .progress-bg { background: #0f172a; border-radius: 8px; height: 18px; width: 100%; overflow: hidden; margin-top: 8px; border: 1px solid #334155; }
         .progress-fill { background: linear-gradient(90deg, #38bdf8, #818cf8); height: 100%; transition: width 0.5s ease; }
     </style>
@@ -96,6 +108,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- SECTION 2: DEMAND PAGING & PAGE REPLACEMENT (PHASE 3) -->
+        <div class="section-header">
+            <div class="section-title" style="border-left-color: #60a5fa; color: #60a5fa;">⚙️ Phase 3: Demand Paging & Page Replacement Analytics</div>
+            <span class="algo-badge" id="algo-badge">Active Algo: FIFO</span>
+        </div>
+        <div class="grid-3">
+            <div class="card metric-box" style="border-left-color: #38bdf8;">
+                <h2>Total Page Faults (Lazy Alloc)</h2>
+                <div class="metric-val" style="color: #38bdf8;" id="page-faults-val">0</div>
+                <div class="metric-sub">On-Demand RAM Hits</div>
+            </div>
+            <div class="card metric-box" style="border-left-color: #f59e0b;">
+                <h2>Total Swap Outs (Evictions)</h2>
+                <div class="metric-val" style="color: #f59e0b;" id="swap-outs-val">0</div>
+                <div class="metric-sub">Pages Swapped to Disk</div>
+            </div>
+            <div class="card metric-box" style="border-left-color: #10b981;">
+                <h2>Paging Efficiency</h2>
+                <div class="metric-val" style="color: #10b981;" id="paging-eff-val">100.0%</div>
+                <div class="metric-sub">Zero Eviction Overhead</div>
+            </div>
+        </div>
+
         <div class="card">
             <h2>📋 Active Processes: Virtual Memory vs Resident Pages (RSS)</h2>
             <table>
@@ -117,7 +152,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </table>
         </div>
 
-        <!-- SECTION 2: CPU SCHEDULING OBSERVATORY (EXISTING) -->
+        <!-- SECTION 3: CPU SCHEDULING OBSERVATORY -->
         <div class="section-title">⚡ CPU Priority Scheduling & Aging</div>
         <div class="grid-4">
             <div class="card metric-box">
@@ -189,7 +224,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         async function loadMemoryData() {
             try {
-                // 1. System Memory Data
+                // 1. System Memory & Paging Data
                 const sysRes = await fetch('/memory_sys');
                 const sysData = await sysRes.json();
                 if (sysData.length > 0) {
@@ -210,6 +245,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     
                     document.getElementById('mem-util').innerText = util + '%';
                     document.getElementById('mem-progress').style.width = util + '%';
+
+                    // Phase 3 Metrics Binding
+                    const algo = latest.active_algo || 'FIFO';
+                    const pageFaults = latest.page_faults !== undefined ? latest.page_faults : 0;
+                    const swapOuts = latest.swap_outs !== undefined ? latest.swap_outs : 0;
+
+                    document.getElementById('algo-badge').innerText = 'Active Algo: ' + algo;
+                    document.getElementById('page-faults-val').innerText = pageFaults;
+                    document.getElementById('swap-outs-val').innerText = swapOuts;
+
+                    let eff = 100.0;
+                    if (pageFaults > 0) {
+                        eff = Math.max(0, ((pageFaults - swapOuts) / pageFaults) * 100).toFixed(1);
+                    }
+                    document.getElementById('paging-eff-val').innerText = eff + '%';
                 }
 
                 // 2. Process Memory Data
@@ -347,6 +397,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         loadAllData();
+        setInterval(loadAllData, 2000);
     </script>
 </body>
 </html>"""
@@ -358,7 +409,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         elif self.path == '/memory_sys':
             self.send_json_response("SELECT * FROM system_memory_snapshots ORDER BY id DESC LIMIT 20")
         elif self.path == '/memory_proc':
-            # Subquery to fetch the latest snapshot for each active PID
             query = """
                 SELECT * FROM process_memory_stats 
                 WHERE id IN (SELECT MAX(id) FROM process_memory_stats GROUP BY pid)
@@ -390,8 +440,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         self.wfile.write(json.dumps(result).encode('utf-8'))
 
+socketserver.TCPServer.allow_reuse_address = True
 with socketserver.TCPServer(("", PORT), Handler) as httpd:
     print(f"\n[+] Integrated Observatory live at: http://localhost:{PORT}")
-    print("[+] Tracking both CPU Scheduling & Memory Metrics from xv6_analytics.db")
+    print("[+] Tracking CPU Scheduling, Memory Metrics, and Phase 3 Paging from xv6_analytics.db")
     print("[+] Press Ctrl+C to stop.\n")
     httpd.serve_forever()

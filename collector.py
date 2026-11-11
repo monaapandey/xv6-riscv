@@ -2,7 +2,6 @@ import subprocess
 import re
 import sqlite3
 
-# Tumhara existing database use kar rahe hain
 conn = sqlite3.connect('xv6_analytics.db')
 cursor = conn.cursor()
 
@@ -21,7 +20,7 @@ CREATE TABLE IF NOT EXISTS process_metrics (
 )
 ''')
 
-# 2. NEW System Memory Snapshots Table
+# 2. System Memory Snapshots Table (Phase 3 Paging added)
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS system_memory_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,11 +30,22 @@ CREATE TABLE IF NOT EXISTS system_memory_snapshots (
     free_memory INTEGER NOT NULL,
     utilization_percentage REAL NOT NULL,
     allocated_pages INTEGER NOT NULL,
-    free_pages INTEGER NOT NULL
+    free_pages INTEGER NOT NULL,
+    active_algo TEXT DEFAULT 'FIFO',
+    page_faults INTEGER DEFAULT 0,
+    swap_outs INTEGER DEFAULT 0
 )
 ''')
 
-# 3. NEW Process Memory Stats Table
+# Automatic migration for existing database schema
+try:
+    cursor.execute("ALTER TABLE system_memory_snapshots ADD COLUMN active_algo TEXT DEFAULT 'FIFO'")
+    cursor.execute("ALTER TABLE system_memory_snapshots ADD COLUMN page_faults INTEGER DEFAULT 0")
+    cursor.execute("ALTER TABLE system_memory_snapshots ADD COLUMN swap_outs INTEGER DEFAULT 0")
+except sqlite3.OperationalError:
+    pass
+
+# 3. Process Memory Stats Table
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS process_memory_stats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,20 +62,20 @@ CREATE TABLE IF NOT EXISTS process_memory_stats (
 ''')
 conn.commit()
 
-print("[+] Collector active & logging BOTH Scheduling and Memory metrics ...")
+print("[+] Collector active & logging Scheduling, Memory, and Phase 3 Paging metrics ...")
 
 process = subprocess.Popen(['make', 'qemu'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
-# Regex Patterns (Existing + New)
+# Regex Patterns
 metric_pattern = re.compile(r'METRIC_LOG:\s*pid=(\d+),\s*priority=(\d+),\s*wait=(\d+),\s*exec=(\d+),\s*is_thread=(\d+)')
-sys_pattern = re.compile(r"SYS_MEM_LOG:\s*total=(\d+),\s*free=(\d+),\s*used=(\d+),\s*allocs=(\d+),\s*frees=(\d+)")
+sys_pattern = re.compile(r"SYS_MEM_LOG:\s*total=(\d+),\s*free=(\d+),\s*used=(\d+),\s*allocs=(\d+),\s*frees=(\d+),\s*algo=(\d+),\s*faults=(\d+),\s*swaps=(\d+)")
 proc_pattern = re.compile(r"PROC_MEM_LOG:\s*pid=(\d+),\s*asid=(\d+),\s*is_thread=(\d+),\s*name=(\S+),\s*vmem=(\d+),\s*rpages=(\d+),\s*state=(\d+)")
 
 try:
     for line in iter(process.stdout.readline, ''):
         print(line, end='')
         
-        # --- 1. SCHEDULING METRICS LOGIC (Existing) ---
+        # --- 1. SCHEDULING LOGIC ---
         match = metric_pattern.search(line)
         if match:
             pid = int(match.group(1))
@@ -84,21 +94,22 @@ try:
             conn.commit()
             print(f"  [+] SCHEDULING LOGGED -> PID: {pid} [{algo_name}]")
         
-        # --- 2. SYSTEM MEMORY LOGIC (New) ---
+        # --- 2. SYSTEM MEMORY LOGIC ---
         sys_match = sys_pattern.search(line)
         if sys_match:
-            total, free, used, allocs, frees = map(int, sys_match.groups())
+            total, free, used, allocs, frees, algo_code, faults, swaps = map(int, sys_match.groups())
             utilization = (used / total * 100.0) if total > 0 else 0.0
+            algo_str = 'LRU' if algo_code == 1 else 'FIFO'
             
             cursor.execute('''
                 INSERT INTO system_memory_snapshots 
-                (total_memory, used_memory, free_memory, utilization_percentage, allocated_pages, free_pages)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (total * 4096, used * 4096, free * 4096, utilization, allocs, frees))
+                (total_memory, used_memory, free_memory, utilization_percentage, allocated_pages, free_pages, active_algo, page_faults, swap_outs)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (total * 4096, used * 4096, free * 4096, utilization, allocs, frees, algo_str, faults, swaps))
             conn.commit()
-            print(f"  [+] SYS_MEM LOGGED -> Used: {used} pages")
+            print(f"  [+] PAGING LOGGED -> Algo: {algo_str} | Page Faults: {faults} | Swaps: {swaps}")
 
-        # --- 3. PROCESS MEMORY LOGIC (New) ---
+        # --- 3. PROCESS MEMORY LOGIC ---
         proc_match = proc_pattern.search(line)
         if proc_match:
             pid, asid, is_thread, name, vmem, rpages, state = proc_match.groups()
@@ -112,7 +123,6 @@ try:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (pid, asid, is_thread, name, vmem, rmem, rpages, state))
             conn.commit()
-            # print(f"  [+] PROC_MEM LOGGED -> PID: {pid} Resident: {rpages} pages")
 
 except KeyboardInterrupt:
     print("\n[+] Stopping Collector...")

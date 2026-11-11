@@ -157,6 +157,8 @@ UPROGS=\
 	$U/_synctest\
 	$U/_memmon\
 	$U/_memthreadtest\
+	$U/_pagetest\
+	$U/_setalgo\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

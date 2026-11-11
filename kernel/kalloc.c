@@ -8,6 +8,8 @@
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
+// Max RSS Pages allowed per process before eviction triggers
+#define MAX_PROC_RSS 8
 
 void freerange(void *pa_start, void *pa_end);
 
@@ -25,6 +27,10 @@ struct {
   uint64 free_pages;
   uint64 alloc_events;
   uint64 free_events;
+  //Phase 3 Memory Management
+  int active_page_algo;
+  uint64 page_faults;
+  uint64 swap_outs;
 } kmem;
 
 void
@@ -38,8 +44,31 @@ kinit()
   // Reset events after boot initialization
   kmem.alloc_events = 0;
   kmem.free_events = 0;
+  // Paging Initialization
+  kmem.active_page_algo = 0; // Default: FIFO
+  kmem.page_faults = 0;
+  kmem.swap_outs = 0;
+}
+void increment_page_fault() {
+  acquire(&kmem.lock);
+  kmem.page_faults++;
+  release(&kmem.lock);
 }
 
+// Function to handle swap outs (Evictions)
+void trigger_page_eviction() {
+  acquire(&kmem.lock);
+  kmem.swap_outs++;
+  release(&kmem.lock);
+}
+
+int set_page_algo(int algo) {
+  if (algo < 0 || algo > 1) return -1;
+  acquire(&kmem.lock);
+  kmem.active_page_algo = algo;
+  release(&kmem.lock);
+  return 0;
+}
 void
 freerange(void *pa_start, void *pa_end)
 {
@@ -101,5 +130,9 @@ void get_sys_meminfo(struct sys_mem_info *info) {
   info->used_pages = kmem.total_pages - kmem.free_pages;
   info->alloc_events = kmem.alloc_events;
   info->free_events = kmem.free_events;
+  // Phase 3 stats copy
+  info->active_page_algo = kmem.active_page_algo;
+  info->page_faults = kmem.page_faults;
+  info->swap_outs = kmem.swap_outs;
   release(&kmem.lock);
 }

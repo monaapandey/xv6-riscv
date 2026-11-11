@@ -6,21 +6,21 @@
 int main(int argc, char *argv[]) {
   struct sys_mem_info smi;
   
-  // Use malloc to allocate buffer on the heap instead of the 4KB stack!
   struct proc_mem_info *pmi = (struct proc_mem_info *)malloc(64 * sizeof(struct proc_mem_info));
   if (pmi == 0) {
     printf("memmon: malloc failed\n");
     exit(1);
   }
 
-  printf("Memory Monitor Started...\n");
+  printf("Memory Observatory Monitor Started...\n");
 
   while(1) {
     if (sysinfo(&smi) == 0) {
-      // 32-bit printf compatible logging
-      printf("SYS_MEM_LOG: total=%d, free=%d, used=%d, allocs=%d, frees=%d\n",
+      // Added algo, faults, swaps to SYS_MEM_LOG
+      printf("SYS_MEM_LOG: total=%d, free=%d, used=%d, allocs=%d, frees=%d, algo=%d, faults=%d, swaps=%d\n",
              (int)smi.total_pages, (int)smi.free_pages, (int)smi.used_pages, 
-             (int)smi.alloc_events, (int)smi.free_events);
+             (int)smi.alloc_events, (int)smi.free_events,
+             smi.active_page_algo, (int)smi.page_faults, (int)smi.swap_outs);
     }
 
     int count = procinfo(pmi);

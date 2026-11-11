@@ -9,6 +9,11 @@ struct sys_mem_info {
   uint64 used_pages;
   uint64 alloc_events;
   uint64 free_events;
+
+  //Phase 3 Paging & Swapping Analytics
+  int active_page_algo;  // 0 = FIFO, 1 = LRU
+  uint64 page_faults;
+  uint64 swap_outs;
 };
 
 struct proc_mem_info {

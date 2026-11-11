@@ -55,3 +55,4 @@ entry("sysinfo");
 entry("procinfo");
 entry("kclone");
 entry("kjoin");
+entry("set_algo");

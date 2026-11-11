@@ -5,12 +5,14 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#define MAX_PROC_RSS 8
 
 struct spinlock tickslock;
 uint ticks;
 
 extern char trampoline[], uservec[];
-
+extern void increment_page_fault(void);
+extern void trigger_page_eviction(void);
 // in kernelvec.S, calls kerneltrap().
 void kernelvec();
 
@@ -68,11 +70,43 @@ usertrap(void)
     syscall();
   } else if ((which_dev = devintr()) != 0) {
     // ok
-  } else if ((r_scause() == 15 || r_scause() == 13) &&
-             vmfault(p->pagetable, p->sz, r_stval(),
-                     (r_scause() == 13) ? 1 : 0) != 0) {
-    // page fault on lazily-allocated page
-  } else {
+  } 
+  //PHASE 3 - LAZY ALLOCATION PAGE FAULT HANDLER
+  else if (r_scause() == 13 || r_scause() == 15) {
+    uint64 fault_va = r_stval(); // Jis address par access fail hua
+    
+    // Check karo kya address process ke jhoothe sz (Virtual Size) ke andar hai
+    if (fault_va >= p->sz || fault_va < p->trapframe->sp) {
+      // Cast fault_va to (void *) for %p, or use %lx
+      printk("usertrap(): Invalid memory access pid=%d, va=%p\n", p->pid, (void *)fault_va);
+      setkilled(p);
+    } else {
+      // Valid lazy allocation access!
+      char *mem = kalloc(); // Ab finally physical RAM do
+      if (mem == 0) {
+        setkilled(p); // Out of memory
+      } else {
+        memset(mem, 0, PGSIZE);
+        uint64 a = PGROUNDDOWN(fault_va); // Page boundary nikaalo
+        
+        // PTE_U (User), PTE_W (Write), PTE_R (Read) permissions do
+        if (mappages(p->pagetable, a, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_U|PTE_X) != 0) {
+          kfree(mem);
+          setkilled(p);
+        } else {
+          // Success! Page memory de di gayi. Telemetry counter badhao.
+          increment_page_fault();
+          // Check if process RSS exceeded artificial limit (8 pages)
+          uint64 current_rss = count_resident_pages(p->pagetable, p->sz);
+          if (current_rss > MAX_PROC_RSS) {
+          // Page Replacement Algorithm Triggered!
+            trigger_page_eviction();
+          }
+        }
+      }
+    }
+  } 
+  else {
     printk("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
     printk("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
     setkilled(p);

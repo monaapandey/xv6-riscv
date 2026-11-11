@@ -37,6 +37,7 @@ int sem_post(int);
 int sem_free(int);
 int sysinfo(struct sys_mem_info*);
 int procinfo(struct proc_mem_info*);
+int set_algo(int algo);
 
 // ulib.c
 int stat(const char *, struct stat *);
