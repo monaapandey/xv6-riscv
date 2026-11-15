@@ -2,6 +2,21 @@ import http.server
 import json
 import socketserver
 import sqlite3
+import sys
+from urllib.parse import parse_qs, urlsplit
+
+from dbms_simulation import (
+    delete_simulation,
+    list_simulations,
+    save_paging_simulation,
+    save_scheduling_simulation,
+)
+from dbms_store import (
+    delete_experiment,
+    initialize_database,
+    list_experiments,
+    save_experiment,
+)
 
 PORT = 8000
 
@@ -63,6 +78,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         
         .progress-bg { background: #0f172a; border-radius: 8px; height: 18px; width: 100%; overflow: hidden; margin-top: 8px; border: 1px solid #334155; }
         .progress-fill { background: linear-gradient(90deg, #38bdf8, #818cf8); height: 100%; transition: width 0.5s ease; }
+
+        /* Standalone SQLite experiment catalog */
+        .dbms-section { margin-top: 36px; border-top: 2px solid #334155; padding-top: 24px; }
+        .dbms-section .section-title { border-left-color: #34d399; color: #34d399; }
+        .dbms-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        .dbms-field { display: flex; flex-direction: column; gap: 4px; color: #cbd5e1; font-size: 13px; font-weight: 600; }
+        .dbms-field input, .dbms-field select, .dbms-field textarea { box-sizing: border-box; width: 100%; }
+        .dbms-field textarea { min-height: 72px; background: #1e293b; color: white; border: 1px solid #475569; border-radius: 4px; padding: 8px; font: inherit; }
+        .dbms-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+        .dbms-secondary { background: #475569; color: #f8fafc; }
+        .dbms-danger { background: #be123c; color: white; }
+        .dbms-status { min-height: 20px; color: #34d399; font-size: 13px; margin-top: 10px; }
+        .dbms-status.error { color: #fb7185; }
+        .dbms-search { max-width: 420px; }
+        @media (max-width: 700px) { .dbms-form-grid { grid-template-columns: 1fr; } }
+        .simulation-section { margin-top: 36px; border-top: 2px solid #334155; padding-top: 24px; }
+        .simulation-section .section-title { border-left-color: #a78bfa; color: #a78bfa; }
+        .simulation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+        .simulation-summary { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+        .simulation-stat { background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 10px 12px; }
+        .simulation-stat strong { color: #c4b5fd; }
+        .simulation-note { color: #c4b5fd; font-size: 13px; font-weight: 600; }
+        @media (max-width: 800px) { .simulation-grid { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
@@ -265,6 +303,169 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <tbody id="table-body"></tbody>
             </table>
         </div>
+
+        <section class="dbms-section" aria-labelledby="dbms-title">
+            <div class="section-header">
+                <div class="section-title" id="dbms-title">🗃️ SQLite DBMS: Experiment Catalog</div>
+            </div>
+            <div class="card" style="border-left: 4px solid #34d399;">
+                <h2>Manage benchmark experiment records</h2>
+                <p style="color:#94a3b8;font-size:13px;">
+                    Create, search, update, and delete experiment metadata in a separate SQLite table.
+                    This catalog is independent of xv6 kernel telemetry.
+                </p>
+                <form id="dbms-experiment-form">
+                    <input type="hidden" name="experiment_id">
+                    <div class="dbms-form-grid">
+                        <label class="dbms-field">Experiment name
+                            <input name="name" type="text" maxlength="100" required>
+                        </label>
+                        <label class="dbms-field">Scheduler
+                            <select name="scheduler" required>
+                                <option>Priority</option><option>Round Robin</option><option>FCFS</option>
+                                <option>SJF</option><option>SRTF</option><option>LJF</option><option>Other</option>
+                            </select>
+                        </label>
+                        <label class="dbms-field">Paging policy
+                            <select name="paging" required>
+                                <option>FIFO</option><option>LRU</option><option>Other</option>
+                            </select>
+                        </label>
+                        <label class="dbms-field">Workload
+                            <input name="workload" type="text" maxlength="120" placeholder="e.g. short-processes" required>
+                        </label>
+                        <label class="dbms-field" style="grid-column: 1 / -1;">Notes
+                            <textarea name="notes" maxlength="1000" placeholder="Optional experiment details"></textarea>
+                        </label>
+                    </div>
+                    <div class="dbms-actions">
+                        <button class="btn-action" type="submit" id="dbms-save-button">Save experiment</button>
+                        <button class="btn-action dbms-secondary" type="reset" id="dbms-reset-button">Clear form</button>
+                    </div>
+                </form>
+                <div class="dbms-status" id="dbms-form-status" role="status" aria-live="polite"></div>
+            </div>
+            <div class="card">
+                <div class="dbms-actions" style="justify-content:space-between;margin-top:0;">
+                    <label class="dbms-field dbms-search">Search catalog
+                        <input id="dbms-search-input" type="text" maxlength="100" placeholder="Name, algorithm, workload, or notes">
+                    </label>
+                    <button class="btn-action" type="button" id="dbms-search-button">Search</button>
+                </div>
+                <div class="dbms-status" id="dbms-list-status" role="status" aria-live="polite"></div>
+                <div style="overflow-x:auto;">
+                    <table>
+                        <thead>
+                            <tr><th>ID</th><th>Name</th><th>Scheduler</th><th>Paging</th><th>Workload</th><th>Notes</th><th>Updated</th><th>Actions</th></tr>
+                        </thead>
+                        <tbody id="dbms-experiment-table">
+                            <tr><td colspan="8" style="color:#64748b;text-align:center;">Loading experiments…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section class="simulation-section" aria-labelledby="simulation-title">
+            <div class="section-header">
+                <div class="section-title" id="simulation-title">🧪 Scheduling & Page-Replacement Simulator</div>
+            </div>
+            <div class="card">
+                <p class="simulation-note">SIMULATION ONLY — these results are calculated by this tool and are not xv6 kernel measurements.</p>
+                <p style="color:#94a3b8;font-size:13px;">
+                    Scheduling times are in abstract ticks. Lower numeric priority means higher priority.
+                    SJF and Priority are non-preemptive; SRTF and Round Robin are preemptive.
+                </p>
+            </div>
+            <div class="simulation-grid">
+                <div class="card" style="border-left:4px solid #a78bfa;">
+                    <h2>CPU Scheduling</h2>
+                    <form id="schedule-simulation-form">
+                        <div class="dbms-form-grid">
+                            <label class="dbms-field" style="grid-column:1 / -1;">Run name
+                                <input name="name" type="text" maxlength="100" required placeholder="e.g. Arrival-time comparison">
+                            </label>
+                            <label class="dbms-field">Algorithm
+                                <select name="algorithm" id="schedule-algorithm">
+                                    <option>FCFS</option><option>SJF</option><option>SRTF</option>
+                                    <option>Priority</option><option>Round Robin</option>
+                                </select>
+                            </label>
+                            <label class="dbms-field" id="quantum-field" style="display:none;">Round Robin time quantum
+                                <input name="quantum" type="number" min="1" max="1000" value="2">
+                            </label>
+                        </div>
+                        <div style="overflow-x:auto;">
+                            <table>
+                                <thead><tr><th>Process</th><th>Arrival</th><th>Burst</th><th>Priority</th><th></th></tr></thead>
+                                <tbody id="schedule-process-inputs"></tbody>
+                            </table>
+                        </div>
+                        <div class="dbms-actions">
+                            <button class="btn-action dbms-secondary" type="button" id="add-process-button">Add process</button>
+                            <button class="btn-action" type="submit">Run scheduling simulation</button>
+                        </div>
+                    </form>
+                    <div class="dbms-status" id="schedule-status" role="status" aria-live="polite"></div>
+                    <div id="schedule-output" hidden>
+                        <h2>Scheduling results</h2>
+                        <div class="simulation-summary" id="schedule-summary"></div>
+                        <div style="overflow-x:auto;">
+                            <table>
+                                <thead><tr><th>Process</th><th>Arrival</th><th>Burst</th><th>Priority</th><th>Start</th><th>Finish</th><th>Waiting</th><th>Turnaround</th><th>Response</th></tr></thead>
+                                <tbody id="schedule-result-rows"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="card" style="border-left:4px solid #34d399;">
+                    <h2>Page Replacement</h2>
+                    <form id="paging-simulation-form">
+                        <div class="dbms-form-grid">
+                            <label class="dbms-field" style="grid-column:1 / -1;">Run name
+                                <input name="name" type="text" maxlength="100" required placeholder="e.g. FIFO versus LRU">
+                            </label>
+                            <label class="dbms-field">Algorithm
+                                <select name="algorithm"><option>FIFO</option><option>LRU</option></select>
+                            </label>
+                            <label class="dbms-field">Number of frames
+                                <input name="frame_count" type="number" min="1" max="32" value="3" required>
+                            </label>
+                            <label class="dbms-field" style="grid-column:1 / -1;">Page reference string
+                                <textarea name="references" maxlength="3000" required placeholder="For example: 7, 0, 1, 2, 0, 3, 0, 4"></textarea>
+                            </label>
+                        </div>
+                        <div class="dbms-actions">
+                            <button class="btn-action" type="submit">Run paging simulation</button>
+                        </div>
+                    </form>
+                    <div class="dbms-status" id="paging-status" role="status" aria-live="polite"></div>
+                    <div id="paging-output" hidden>
+                        <h2>Page-reference results</h2>
+                        <div class="simulation-summary" id="paging-summary"></div>
+                        <div style="overflow-x:auto;">
+                            <table>
+                                <thead><tr><th>Step</th><th>Page</th><th>Result</th><th>Frames (oldest first)</th><th>Evicted</th></tr></thead>
+                                <tbody id="paging-result-rows"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="chart-header">
+                    <h2>Saved simulation runs</h2>
+                    <button class="btn-action" type="button" id="refresh-simulations-button">Refresh runs</button>
+                </div>
+                <div class="dbms-status" id="simulation-history-status" role="status" aria-live="polite"></div>
+                <div style="overflow-x:auto;">
+                    <table>
+                        <thead><tr><th>Run</th><th>Type</th><th>Algorithm</th><th>Summary</th><th>Created</th><th>Actions</th></tr></thead>
+                        <tbody id="simulation-history-rows"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
     </div>
 
     <script>
@@ -653,6 +854,367 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
+        // --- STANDALONE SQLITE EXPERIMENT CATALOG ---
+        function setDbmsStatus(elementId, message, isError = false) {
+            const element = document.getElementById(elementId);
+            element.textContent = message;
+            element.classList.toggle('error', isError);
+        }
+
+        async function dbmsRequest(url, options = {}) {
+            const response = await fetch(url, options);
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+            return result;
+        }
+
+        function dbmsCell(row, value) {
+            const cell = document.createElement('td');
+            cell.textContent = value == null ? '' : String(value);
+            row.appendChild(cell);
+            return cell;
+        }
+
+        async function loadDbmsExperiments() {
+            const tbody = document.getElementById('dbms-experiment-table');
+            setDbmsStatus('dbms-list-status', 'Loading…');
+            try {
+                const search = document.getElementById('dbms-search-input').value.trim();
+                const records = await dbmsRequest(`/dbms/experiments?q=${encodeURIComponent(search)}`);
+                tbody.replaceChildren();
+                if (records.length === 0) {
+                    const row = document.createElement('tr');
+                    const cell = dbmsCell(row, 'No experiment records found.');
+                    cell.colSpan = 8;
+                    cell.style.textAlign = 'center';
+                    cell.style.color = '#64748b';
+                    tbody.appendChild(row);
+                } else {
+                    records.forEach(record => {
+                        const row = document.createElement('tr');
+                        dbmsCell(row, record.experiment_id);
+                        dbmsCell(row, record.name);
+                        dbmsCell(row, record.scheduler);
+                        dbmsCell(row, record.paging);
+                        dbmsCell(row, record.workload);
+                        dbmsCell(row, record.notes);
+                        dbmsCell(row, record.updated_at);
+
+                        const actions = document.createElement('td');
+                        const edit = document.createElement('button');
+                        edit.type = 'button';
+                        edit.className = 'btn-action';
+                        edit.textContent = 'Edit';
+                        edit.addEventListener('click', () => editDbmsExperiment(record));
+                        const remove = document.createElement('button');
+                        remove.type = 'button';
+                        remove.className = 'btn-action dbms-danger';
+                        remove.style.marginLeft = '6px';
+                        remove.textContent = 'Delete';
+                        remove.addEventListener('click', () => removeDbmsExperiment(record.experiment_id));
+                        actions.append(edit, remove);
+                        row.appendChild(actions);
+                        tbody.appendChild(row);
+                    });
+                }
+                setDbmsStatus('dbms-list-status', `${records.length} record(s)`);
+            } catch (error) {
+                tbody.replaceChildren();
+                setDbmsStatus('dbms-list-status', error.message, true);
+            }
+        }
+
+        function editDbmsExperiment(record) {
+            const form = document.getElementById('dbms-experiment-form');
+            form.elements.experiment_id.value = record.experiment_id;
+            form.elements.name.value = record.name;
+            form.elements.scheduler.value = record.scheduler;
+            form.elements.paging.value = record.paging;
+            form.elements.workload.value = record.workload;
+            form.elements.notes.value = record.notes;
+            document.getElementById('dbms-save-button').textContent = 'Update experiment';
+            setDbmsStatus('dbms-form-status', `Editing experiment #${record.experiment_id}`);
+            form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        async function removeDbmsExperiment(experimentId) {
+            if (!confirm(`Delete experiment #${experimentId}?`)) return;
+            try {
+                await dbmsRequest(`/dbms/experiments/${experimentId}`, { method: 'DELETE' });
+                setDbmsStatus('dbms-form-status', `Deleted experiment #${experimentId}`);
+                loadDbmsExperiments();
+            } catch (error) {
+                setDbmsStatus('dbms-form-status', error.message, true);
+            }
+        }
+
+        document.getElementById('dbms-experiment-form').addEventListener('submit', async event => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const formData = new FormData(form);
+            const experimentId = formData.get('experiment_id');
+            const record = Object.fromEntries(formData.entries());
+            delete record.experiment_id;
+            const url = experimentId ? `/dbms/experiments/${experimentId}` : '/dbms/experiments';
+            const method = experimentId ? 'PUT' : 'POST';
+            try {
+                await dbmsRequest(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(record)
+                });
+                form.reset();
+                form.elements.experiment_id.value = '';
+                document.getElementById('dbms-save-button').textContent = 'Save experiment';
+                setDbmsStatus('dbms-form-status', experimentId ? 'Experiment updated.' : 'Experiment saved.');
+                loadDbmsExperiments();
+            } catch (error) {
+                setDbmsStatus('dbms-form-status', error.message, true);
+            }
+        });
+
+        document.getElementById('dbms-experiment-form').addEventListener('reset', () => {
+            document.getElementById('dbms-save-button').textContent = 'Save experiment';
+            setDbmsStatus('dbms-form-status', '');
+        });
+        document.getElementById('dbms-search-button').addEventListener('click', loadDbmsExperiments);
+        document.getElementById('dbms-search-input').addEventListener('keydown', event => {
+            if (event.key === 'Enter') loadDbmsExperiments();
+        });
+
+        // --- ISOLATED SCHEDULING AND PAGE-REPLACEMENT SIMULATIONS ---
+        function renumberScheduleProcesses() {
+            document.querySelectorAll('#schedule-process-inputs tr').forEach((row, index) => {
+                row.cells[0].textContent = `P${index + 1}`;
+            });
+        }
+
+        function addScheduleProcess(arrival = 0, burst = 5, priority = 1) {
+            const tbody = document.getElementById('schedule-process-inputs');
+            if (tbody.rows.length >= 20) {
+                setDbmsStatus('schedule-status', 'A simulation can have at most 20 processes.', true);
+                return;
+            }
+            const row = document.createElement('tr');
+            const label = document.createElement('td');
+            row.appendChild(label);
+            for (const [field, value, min, max] of [
+                ['arrival_time', arrival, 0, 100000],
+                ['burst_time', burst, 1, 10000],
+                ['priority', priority, 0, 10]
+            ]) {
+                const cell = document.createElement('td');
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.dataset.field = field;
+                input.min = String(min);
+                input.max = String(max);
+                input.value = String(value);
+                input.required = true;
+                input.style.width = '82px';
+                cell.appendChild(input);
+                row.appendChild(cell);
+            }
+            const actions = document.createElement('td');
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'btn-action dbms-danger';
+            remove.textContent = 'Remove';
+            remove.addEventListener('click', () => {
+                row.remove();
+                renumberScheduleProcesses();
+            });
+            actions.appendChild(remove);
+            row.appendChild(actions);
+            tbody.appendChild(row);
+            renumberScheduleProcesses();
+            setDbmsStatus('schedule-status', '');
+        }
+
+        function addSimulationStat(container, label, value) {
+            const item = document.createElement('div');
+            item.className = 'simulation-stat';
+            const title = document.createElement('strong');
+            title.textContent = `${label}: `;
+            item.append(title, document.createTextNode(String(value)));
+            container.appendChild(item);
+        }
+
+        function showSimulationRun(run) {
+            if (run.simulation_type === 'scheduling') {
+                const output = document.getElementById('schedule-output');
+                const summary = document.getElementById('schedule-summary');
+                const rows = document.getElementById('schedule-result-rows');
+                output.hidden = false;
+                document.getElementById('paging-output').hidden = true;
+                summary.replaceChildren();
+                addSimulationStat(summary, 'Algorithm', run.algorithm);
+                addSimulationStat(summary, 'Average waiting', `${run.summary.average_waiting_time} ticks`);
+                addSimulationStat(summary, 'Average turnaround', `${run.summary.average_turnaround_time} ticks`);
+                addSimulationStat(summary, 'Average response', `${run.summary.average_response_time} ticks`);
+                rows.replaceChildren();
+                run.results.forEach(process => {
+                    const row = document.createElement('tr');
+                    [
+                        process.pid, process.arrival_time, process.burst_time,
+                        process.priority, process.start_time, process.completion_time,
+                        process.waiting_time, process.turnaround_time, process.response_time
+                    ].forEach(value => dbmsCell(row, value));
+                    rows.appendChild(row);
+                });
+            } else {
+                const output = document.getElementById('paging-output');
+                const summary = document.getElementById('paging-summary');
+                const rows = document.getElementById('paging-result-rows');
+                output.hidden = false;
+                document.getElementById('schedule-output').hidden = true;
+                summary.replaceChildren();
+                addSimulationStat(summary, 'Algorithm', run.algorithm);
+                addSimulationStat(summary, 'Frames', run.inputs.frame_count);
+                addSimulationStat(summary, 'Page faults', run.summary.faults);
+                addSimulationStat(summary, 'Hits', run.summary.hits);
+                addSimulationStat(summary, 'Hit ratio', `${run.summary.hit_ratio_percent}%`);
+                rows.replaceChildren();
+                run.results.forEach(step => {
+                    const row = document.createElement('tr');
+                    [
+                        step.step_index,
+                        step.page,
+                        step.hit ? 'HIT' : 'FAULT',
+                        `[${step.frames.join(', ')}]`,
+                        step.evicted_page == null ? '-' : step.evicted_page
+                    ].forEach(value => dbmsCell(row, value));
+                    rows.appendChild(row);
+                });
+            }
+        }
+
+        function simulationSummaryText(run) {
+            if (run.simulation_type === 'scheduling') {
+                return `Avg wait ${run.summary.average_waiting_time}, avg TAT ${run.summary.average_turnaround_time} ticks`;
+            }
+            return `${run.summary.faults} faults, ${run.summary.hits} hits (${run.summary.hit_ratio_percent}% hit ratio)`;
+        }
+
+        async function loadSimulationHistory() {
+            const tbody = document.getElementById('simulation-history-rows');
+            setDbmsStatus('simulation-history-status', 'Loading…');
+            try {
+                const runs = await dbmsRequest('/dbms/simulations');
+                tbody.replaceChildren();
+                if (runs.length === 0) {
+                    const row = document.createElement('tr');
+                    const cell = dbmsCell(row, 'No saved simulations yet.');
+                    cell.colSpan = 6;
+                    cell.style.textAlign = 'center';
+                    cell.style.color = '#64748b';
+                    tbody.appendChild(row);
+                } else {
+                    runs.forEach(run => {
+                        const row = document.createElement('tr');
+                        dbmsCell(row, run.name);
+                        dbmsCell(row, run.simulation_type === 'scheduling' ? 'Scheduling (simulated)' : 'Paging (simulated)');
+                        dbmsCell(row, run.algorithm);
+                        dbmsCell(row, simulationSummaryText(run));
+                        dbmsCell(row, run.created_at);
+                        const actions = document.createElement('td');
+                        const view = document.createElement('button');
+                        view.type = 'button';
+                        view.className = 'btn-action';
+                        view.textContent = 'View';
+                        view.addEventListener('click', () => showSimulationRun(run));
+                        const remove = document.createElement('button');
+                        remove.type = 'button';
+                        remove.className = 'btn-action dbms-danger';
+                        remove.style.marginLeft = '6px';
+                        remove.textContent = 'Delete';
+                        remove.addEventListener('click', () => removeSimulationRun(run.run_id));
+                        actions.append(view, remove);
+                        row.appendChild(actions);
+                        tbody.appendChild(row);
+                    });
+                }
+                setDbmsStatus('simulation-history-status', `Showing ${runs.length} most recent run(s).`);
+            } catch (error) {
+                tbody.replaceChildren();
+                setDbmsStatus('simulation-history-status', error.message, true);
+            }
+        }
+
+        async function removeSimulationRun(runId) {
+            if (!confirm(`Delete saved simulation #${runId}?`)) return;
+            try {
+                await dbmsRequest(`/dbms/simulations/${runId}`, { method: 'DELETE' });
+                setDbmsStatus('simulation-history-status', `Deleted simulation #${runId}.`);
+                loadSimulationHistory();
+            } catch (error) {
+                setDbmsStatus('simulation-history-status', error.message, true);
+            }
+        }
+
+        document.getElementById('schedule-algorithm').addEventListener('change', event => {
+            document.getElementById('quantum-field').style.display =
+                event.target.value === 'Round Robin' ? 'flex' : 'none';
+        });
+        [5, 3, 8].forEach(burst => addScheduleProcess(0, burst, 1));
+        document.getElementById('add-process-button').addEventListener('click', () => {
+            addScheduleProcess();
+        });
+        document.getElementById('schedule-simulation-form').addEventListener('submit', async event => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const processes = [...document.querySelectorAll('#schedule-process-inputs tr')].map(row => {
+                const process = {};
+                row.querySelectorAll('input').forEach(input => {
+                    process[input.dataset.field] = Number(input.value);
+                });
+                return process;
+            });
+            const payload = {
+                name: form.elements.name.value,
+                algorithm: form.elements.algorithm.value,
+                quantum: Number(form.elements.quantum.value),
+                processes
+            };
+            setDbmsStatus('schedule-status', 'Calculating and saving simulated results…');
+            try {
+                const run = await dbmsRequest('/dbms/simulations/scheduling', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                showSimulationRun(run);
+                setDbmsStatus('schedule-status', 'Simulation complete. Results saved as simulated data.');
+                loadSimulationHistory();
+            } catch (error) {
+                setDbmsStatus('schedule-status', error.message, true);
+            }
+        });
+        document.getElementById('paging-simulation-form').addEventListener('submit', async event => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const payload = {
+                name: form.elements.name.value,
+                algorithm: form.elements.algorithm.value,
+                frame_count: Number(form.elements.frame_count.value),
+                references: form.elements.references.value
+            };
+            setDbmsStatus('paging-status', 'Calculating and saving simulated results…');
+            try {
+                const run = await dbmsRequest('/dbms/simulations/paging', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                showSimulationRun(run);
+                setDbmsStatus('paging-status', 'Simulation complete. Results saved as simulated data.');
+                loadSimulationHistory();
+            } catch (error) {
+                setDbmsStatus('paging-status', error.message, true);
+            }
+        });
+        document.getElementById('refresh-simulations-button').addEventListener('click', loadSimulationHistory);
+
         // --- MASTER LOOP ---
         function loadAllData() {
             if (memMode === 'REAL_MEM') {
@@ -667,6 +1229,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         loadAllData();
+        loadDbmsExperiments();
+        loadSimulationHistory();
         setInterval(loadAllData, 2000);
     </script>
 </body>
@@ -674,7 +1238,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        if self.path == '/data':
+        path = urlsplit(self.path)
+        if path.path == '/dbms/experiments':
+            search = parse_qs(path.query).get('q', [''])[0]
+            try:
+                self.send_dbms_json(200, list_experiments(search))
+            except ValueError as error:
+                self.send_dbms_json(400, {"error": str(error)})
+            except sqlite3.Error as error:
+                print(f"DBMS query failed: {error}", file=sys.stderr)
+                self.send_dbms_json(500, {"error": "Database query failed."})
+        elif path.path == '/dbms/simulations':
+            try:
+                self.send_dbms_json(200, list_simulations())
+            except sqlite3.Error as error:
+                print(f"Simulation history query failed: {error}", file=sys.stderr)
+                self.send_dbms_json(500, {"error": "Simulation history query failed."})
+        elif self.path == '/data':
             self.send_json_response("SELECT * FROM process_metrics ORDER BY metric_id DESC")
         elif self.path == '/memory_sys':
             self.send_json_response("SELECT * FROM system_memory_snapshots ORDER BY id DESC LIMIT 20")
@@ -686,6 +1266,125 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type', 'text/html')
             self.end_headers()
             self.wfile.write(HTML_TEMPLATE.encode('utf-8'))
+
+    def do_POST(self):
+        path = urlsplit(self.path).path
+        if path not in (
+            '/dbms/experiments',
+            '/dbms/simulations/scheduling',
+            '/dbms/simulations/paging',
+        ):
+            self.send_dbms_json(404, {"error": "Not found."})
+            return
+        try:
+            record = self.read_dbms_json()
+            if path == '/dbms/experiments':
+                result = save_experiment(record)
+            elif path == '/dbms/simulations/scheduling':
+                result = save_scheduling_simulation(record)
+            else:
+                result = save_paging_simulation(record)
+            self.send_dbms_json(201, result)
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            self.send_dbms_json(400, {"error": str(error)})
+        except sqlite3.Error as error:
+            print(f"DBMS insert failed: {error}", file=sys.stderr)
+            self.send_dbms_json(500, {"error": "Database insert failed."})
+
+    def do_PUT(self):
+        experiment_id = self.experiment_id_from_path()
+        if experiment_id is None:
+            self.send_dbms_json(404, {"error": "Not found."})
+            return
+        try:
+            record = self.read_dbms_json()
+            saved = save_experiment(record, experiment_id)
+            if saved is None:
+                self.send_dbms_json(404, {"error": "Experiment not found."})
+            else:
+                self.send_dbms_json(200, saved)
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            self.send_dbms_json(400, {"error": str(error)})
+        except sqlite3.Error as error:
+            print(f"DBMS update failed: {error}", file=sys.stderr)
+            self.send_dbms_json(500, {"error": "Database update failed."})
+
+    def do_DELETE(self):
+        simulation_run_id = self.simulation_run_id_from_path()
+        if simulation_run_id is not None:
+            try:
+                if delete_simulation(simulation_run_id):
+                    self.send_dbms_json(200, {"deleted": True})
+                else:
+                    self.send_dbms_json(404, {"error": "Simulation run not found."})
+            except ValueError as error:
+                self.send_dbms_json(400, {"error": str(error)})
+            except sqlite3.Error as error:
+                print(f"Simulation delete failed: {error}", file=sys.stderr)
+                self.send_dbms_json(500, {"error": "Simulation delete failed."})
+            return
+
+        experiment_id = self.experiment_id_from_path()
+        if experiment_id is None:
+            self.send_dbms_json(404, {"error": "Not found."})
+            return
+        try:
+            if delete_experiment(experiment_id):
+                self.send_dbms_json(200, {"deleted": True})
+            else:
+                self.send_dbms_json(404, {"error": "Experiment not found."})
+        except ValueError as error:
+            self.send_dbms_json(400, {"error": str(error)})
+        except sqlite3.Error as error:
+            print(f"DBMS delete failed: {error}", file=sys.stderr)
+            self.send_dbms_json(500, {"error": "Database delete failed."})
+
+    def experiment_id_from_path(self):
+        path = urlsplit(self.path).path
+        prefix = '/dbms/experiments/'
+        return self.numeric_id_from_path(path, prefix)
+
+    def simulation_run_id_from_path(self):
+        path = urlsplit(self.path).path
+        prefix = '/dbms/simulations/'
+        if not path.startswith(prefix):
+            return None
+        suffix = path[len(prefix):]
+        if suffix.count('/') != 0:
+            return None
+        return self.numeric_id_from_path(path, prefix)
+
+    @staticmethod
+    def numeric_id_from_path(path, prefix):
+        if not path.startswith(prefix):
+            return None
+        identifier = path[len(prefix):]
+        if not identifier.isdecimal() or len(identifier) > 12:
+            return None
+        return int(identifier)
+
+    def read_dbms_json(self):
+        content_type = self.headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
+        if content_type != 'application/json':
+            raise ValueError("Content-Type must be application/json.")
+        try:
+            content_length = int(self.headers.get('Content-Length', '0'))
+        except ValueError as error:
+            raise ValueError("Invalid Content-Length.") from error
+        if content_length < 1 or content_length > 16384:
+            raise ValueError("Request body must be between 1 and 16384 bytes.")
+        value = json.loads(self.rfile.read(content_length).decode('utf-8'))
+        if not isinstance(value, dict):
+            raise ValueError("Request body must be a JSON object.")
+        return value
+
+    def send_dbms_json(self, status, value):
+        body = json.dumps(value).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def send_json_response(self, query):
         self.send_response(200)
@@ -707,6 +1406,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(json.dumps(result).encode('utf-8'))
 
 socketserver.TCPServer.allow_reuse_address = True
+initialize_database()
 with socketserver.TCPServer(("", PORT), Handler) as httpd:
     print(f"\n[+] Hybrid Kernel Observatory Live at: http://localhost:{PORT}")
     print("[+] Unified Control Plane Enabled for Memory & CPU Analytics")

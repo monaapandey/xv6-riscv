@@ -46,3 +46,30 @@ You will need a RISC-V "newlib" tool chain from
 https://github.com/riscv/riscv-gnu-toolchain, and qemu compiled for
 riscv64-softmmu.  Once they are installed, and in your shell
 search path, you can run "make qemu".
+
+HOST-SIDE SQLITE EXPERIMENT CATALOG
+
+The dashboard includes a host-side SQLite catalog for recording benchmark
+experiment metadata. It is separate from the xv6 kernel and does not change
+kernel telemetry behavior. From the project directory, run:
+
+  python3 dashboard.py
+
+Then open http://localhost:8000. The SQLite catalog supports creating,
+searching, editing, and deleting experiment records in the
+"dbms_experiments" table in xv6_analytics.db. Its schema is in
+dbms_schema.sql.
+
+SIMULATED SCHEDULING AND PAGE REPLACEMENT
+
+The dashboard also includes a separate simulator. Scheduling runs accept
+arrival time, burst time, and priority for each process, and support FCFS,
+SJF, SRTF, Priority, and Round Robin (with a time quantum). SJF and Priority
+are non-preemptive; SRTF and Round Robin are preemptive. Lower numeric
+priorities run first.
+
+Paging runs accept a comma- or space-separated page reference string and a
+frame count, then simulate FIFO or LRU. Results include per-process scheduling
+times or each page reference's hit/fault and frame contents. Runs are stored
+separately in the "dbms_simulation_runs", "dbms_schedule_results", and
+"dbms_paging_steps" tables. These are simulated results, not xv6 measurements.
